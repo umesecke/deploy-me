@@ -1,0 +1,195 @@
+#!/bin/bash
+
+# Copyright (c) 2010, Uwe Mesecke <uwe@mesecke.net>
+# All rights reserved.
+#
+# Redistribution and use in source and binary forms, with or without modification,
+# are permitted provided that the following conditions are met:
+#
+#    * Redistributions of source code must retain the above copyright notice, this
+#      list of conditions and the following disclaimer.
+#    * Redistributions in binary form must reproduce the above copyright notice,
+#      this list of conditions and the following disclaimer in the documentation
+#      and/or other materials provided with the distribution.
+#    * Neither the name of Uwe Mesecke nor the names of his contributors may be used
+#      to endorse or promote products derived from this software without specific
+#      prior written permission.
+#
+# THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS" AND
+# ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE IMPLIED
+# WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE DISCLAIMED.
+# IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT,
+# INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING,
+# BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE,
+# DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF
+# LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE
+# OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF
+# ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+
+VERSION=0.1.0
+
+echo "deploy-me $VERSION by Uwe Mesecke <uwe@mesecke.net>" >&2
+
+shopt -s extglob
+
+printDebug()
+{
+	if [ "$debug" == "1" ]; then
+		echo "DEBUG: $1" >&2
+	fi
+}
+
+printHalt()
+{
+	echo "ERROR: $1" >&2
+	exit 1
+}
+
+findDeployRoot()
+{
+	oldpwd=`pwd`
+	while true; do
+		printDebug "testing deployment root in $oldpwd"
+		if [ -d deploy -o -f base.deploy ]; then
+			printDebug "found deployment root in $oldpwd"
+			echo $oldpwd
+			return 0
+		fi
+		cd ..
+		if [ $oldpwd == `pwd` ]; then
+			break
+		fi
+		oldpwd=`pwd`
+	done
+	printDebug "deployment root not found"
+	return 1
+}
+
+addSpecToCommand()
+{
+	printDebug "adding spec $2 to command"
+	echo "$1 --filter ._$deploymentSpecBase/$2.deploy"
+}
+
+readSpecFile()
+{
+	filename="$deploymentSpecBase/$1.deploy"
+	printDebug "reading spec file: $filename"
+	while read line; do
+		printDebug "read line: $line"
+		if [ "${line:0:3}" != "## " ]; then
+			continue
+		fi
+		line=${line:3}
+		name=${line%%*( )=*}
+		value=${line##*=*( |\")}
+		value=${value%%*( |\")}
+		#name=${line%% = *}
+		#value=${line##* = }
+		printDebug "parsed line: NAME: $name - VALUE: $value"
+		case $name in
+			source_path)
+				CONF_source_path=$value
+				;;
+			source_glob)
+				CONF_source_glob=$value
+				;;
+			destination)
+				CONF_destination=$value
+				;;
+		esac
+	done < $filename
+}
+
+while getopts ":rnd" opt; do
+	case $opt in
+		r)
+			reverse=1
+			;;
+		n)
+			dryrun=1
+			;;
+		d)
+			debug=1
+			;;
+		\?)
+			printHalt "Invalid option: -$OPTARG"
+			;;
+		:)
+			printHalt "Option -$OPTARG requires an argument."
+			;;
+	esac
+done
+
+shift $(($OPTIND - 1))
+
+deploymentRoot=`findDeployRoot`
+if [ -z $deploymentRoot ]; then
+	printHalt "Unable to find deployment root."
+fi
+
+if [ ! -f base.deploy ]; then
+	deploymentSpecBase="$deploymentRoot/deploy"
+else
+	deploymentSpecBase=$deploymentRoot
+fi
+
+if [ -z "$1" ]; then
+	specName="default"
+else
+	specName="$1"
+fi
+
+if [ ! -f $deploymentSpecBase/base.deploy ]; then
+	printHalt "unable to find deployment base spec in $deploymentSpecBase/base.deploy"
+fi
+if [ ! -f $deploymentSpecBase/$specName.deploy ]; then
+	printHalt "unable to find deployment spec '$specName' in $deploymentSpecBase/$specName.deploy"
+fi
+
+cmd="rsync -azv --delete"
+if [ "$dryrun" == "1" ]; then
+	cmd="$cmd --dry-run"
+fi
+
+cmd=`addSpecToCommand "$cmd" base`
+readSpecFile base
+
+if [ $specName != "base" ]; then
+	cmd=`addSpecToCommand "$cmd" $specName`
+	readSpecFile $specName
+fi
+
+if [ -z "$CONF_source_path" ]; then
+	printHalt "no source_path specified"
+fi
+if [ -z "$CONF_destination" ]; then
+	printHalt "no destination specified"
+fi
+
+if [ "${CONF_source_path:0:1}" != "/" ]; then
+	CONF_source_path="$deploymentRoot/$CONF_source_path"
+fi
+
+if [ "$reverse" != "1" ]; then
+	sourcePath=$CONF_source_path
+	destPath=$CONF_destination
+else
+	destPath=$CONF_source_path
+	sourcePath=$CONF_destination
+fi
+
+if [ ! -z "$CONF_source_glob" ]; then
+	tmp=""
+	for glob in $CONF_source_glob; do
+		tmp="$tmp $sourcePath/$glob"
+	done
+	sourcePath=$tmp
+fi
+
+cmd="$cmd $sourcePath $destPath"
+
+printDebug "Command: $cmd"
+
+$cmd
+

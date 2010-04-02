@@ -1,0 +1,7 @@
+deploy-me is a simple deployment script using rsync. You can setup profiles
+by creating files with include and exclude patterns, using the format of
+rsync filter rules.
+
+Author: Uwe Mesecke <uwe@mesecke.net>
+Website: http://github.com/umesecke/deploy-me
+
